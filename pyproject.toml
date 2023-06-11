@@ -1,0 +1,21 @@
+[tool.poetry]
+name = "sagemaker-inference-recommendation-test"
+version = "0.1.0"
+description = ""
+authors = ["sambaiz <godgourd@gmail.com>"]
+readme = "README.md"
+packages = [{include = "src"}]
+
+[tool.poetry.dependencies]
+python = "^3.9"
+torch = "^2.0.1"
+sagemaker = "^2.159.0"
+sagemaker-training = "^4.5.0"
+boto3 = "^1.26.140"
+torchvision = "^0.15.2"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
