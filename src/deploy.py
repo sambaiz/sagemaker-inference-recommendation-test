@@ -66,6 +66,7 @@ def start_default_inference_recommendations_job(sagemaker_client, model_name: st
           'ModelLatency': r['Metrics']['ModelLatency'],
           'CpuUtilization': r['Metrics']['CpuUtilization'],
           'MemoryUtilization': r['Metrics']['MemoryUtilization'],
+          'MaxInvocationsPerMinute': r['Metrics']['MaxInvocations'],
         } for r in response['InferenceRecommendations']
       ]
       return sorted(recommendations, key=lambda v: v['CostPerInference'])
@@ -76,7 +77,10 @@ def start_default_inference_recommendations_job(sagemaker_client, model_name: st
     time.sleep(15)
 
 
-def start_advanced_inference_recommendations_job(sagemaker_client, model_name: str, instance_type_options: list[str]):
+def start_advanced_inference_recommendations_job(
+        sagemaker_client,
+        model_name: str,
+        instance_type_options: list[str]):
   job_name = f"{model_name}-advanced"
   sagemaker_client.create_inference_recommendations_job(
     JobName=job_name,
@@ -137,6 +141,7 @@ def start_advanced_inference_recommendations_job(sagemaker_client, model_name: s
           'ModelLatency': r['Metrics']['ModelLatency'],
           'CpuUtilization': r['Metrics']['CpuUtilization'],
           'MemoryUtilization': r['Metrics']['MemoryUtilization'],
+          'MaxInvocationsPerMinute': r['Metrics']['MaxInvocations'],
         } for r in response['InferenceRecommendations']
       ]
       return sorted(recommendations, key=lambda v: v['CostPerInference'])
@@ -147,7 +152,11 @@ def start_advanced_inference_recommendations_job(sagemaker_client, model_name: s
     time.sleep(15)
 
 
-def create_endpoint_config(sagemaker_client, model_name: str, variant_name: str, instance_type: str):
+def create_endpoint_config(
+        sagemaker_client,
+        model_name: str,
+        variant_name: str,
+        instance_type: str):
   sagemaker_client.create_endpoint_config(
     EndpointConfigName=model_name,
     ProductionVariants=[
@@ -163,7 +172,10 @@ def create_endpoint_config(sagemaker_client, model_name: str, variant_name: str,
   return model_name
 
 
-def create_or_update_endpoint(sagemaker_client, endpoint_name: str, config_name: str):
+def create_or_update_endpoint(
+        sagemaker_client,
+        endpoint_name: str,
+        config_name: str):
   try:
     sagemaker_client.describe_endpoint(EndpointName=endpoint_name)
     sagemaker_client.update_endpoint(
@@ -180,7 +192,14 @@ def create_or_update_endpoint(sagemaker_client, endpoint_name: str, config_name:
     )
 
 
-def register_auto_scale_settings(sagemaker_client, autoscaling_client, endpoint_name: str, variant_name: str):
+def register_auto_scale_settings(
+        sagemaker_client,
+        autoscaling_client,
+        endpoint_name: str,
+        variant_name: str,
+        min_capacity: int,
+        max_capacity: int,
+        invocation_per_instance_minute: int):
   while True:
     endpoint = sagemaker_client.describe_endpoint(EndpointName=endpoint_name)
     elapsed_time = datetime.now(timezone.utc) - endpoint['LastModifiedTime']
@@ -198,8 +217,8 @@ def register_auto_scale_settings(sagemaker_client, autoscaling_client, endpoint_
     ServiceNamespace="sagemaker",
     ResourceId=resource_id,
     ScalableDimension="sagemaker:variant:DesiredInstanceCount",
-    MinCapacity=1,
-    MaxCapacity=5,
+    MinCapacity=min_capacity,
+    MaxCapacity=max_capacity,
   )
 
   autoscaling_client.put_scaling_policy(
@@ -209,7 +228,7 @@ def register_auto_scale_settings(sagemaker_client, autoscaling_client, endpoint_
     ScalableDimension="sagemaker:variant:DesiredInstanceCount",
     PolicyType="TargetTrackingScaling",
     TargetTrackingScalingPolicyConfiguration={
-      "TargetValue": 5.0,
+      "TargetValue": invocation_per_instance_minute,
       "PredefinedMetricSpecification": {
         "PredefinedMetricType": "SageMakerVariantInvocationsPerInstance"
       }
@@ -229,7 +248,7 @@ def main():
   recommendations = start_default_inference_recommendations_job(sagemaker_client, model.name)
   print("--- Default ----")
   for r in recommendations:
-    print(f"{r['InstanceType']}: ${r['CostPerInference']}/inference")
+    print(f"{r['InstanceType']} x {r['InitialInstanceCount']}: ${r['CostPerInference']}/inference")
   print("-------")
 
   recommendations = start_advanced_inference_recommendations_job(
@@ -239,7 +258,7 @@ def main():
   )
   print("--- Advanced ----")
   for r in recommendations:
-    print(f"{r['InstanceType']}: ${r['CostPerInference']}/inference")
+    print(f"{r['InstanceType']} x {r['InitialInstanceCount']}: ${r['CostPerInference']}/inference")
   print("-------")
 
   # create an endpoint config with recommended instance type
@@ -255,12 +274,17 @@ def main():
   endpoint_name = 'sagemaker-inference-test'
   create_or_update_endpoint(sagemaker_client, endpoint_name, config_name)
 
+  invocation_per_instance_minute = recommendations[0]['MaxInvocationsPerMinute'] / recommendations[0]['InitialInstanceCount']
+
   # set up auto scaling to the variant
   register_auto_scale_settings(
     sagemaker_client,
     autoscaling_client,
     endpoint_name,
-    variant_name
+    variant_name,
+    min_capacity=recommendations[0]['InitialInstanceCount'],
+    max_capacity=recommendations[0]['InitialInstanceCount']+10,
+    invocation_per_instance_minute=int(invocation_per_instance_minute * 0.8),
   )
 
   print(f"Endpoint name: {endpoint_name}")
